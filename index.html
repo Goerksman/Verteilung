@@ -37,7 +37,7 @@
   </div>
 
   <script>
-    // 1. Deine vier Treatment-URLs hier eintragen
+    // 1. Deine sechs Treatment-URLs hier eintragen
     const TREATMENTS = [
       "https://goerksman.github.io/Verhandeln.github.io/",
       "https://goerksman.github.io/Verhandlung2/",
@@ -47,6 +47,13 @@
       "https://goerksman.github.io/Verhandlung-6/"
     ];
 
+    // Gewünschte Wahrscheinlichkeiten:
+    // Index 0–3: je 21.25% (zusammen 85 %)
+    // Index 4:   7.5%
+    // Index 5:   7.5%
+    //
+    // In Summe: 100 %
+
     // 2. Optional: vorhandene Query-Parameter (z.B. ?code=ABC123) weiterreichen
     const query = window.location.search; // inkl. '?', sonst leer
 
@@ -54,7 +61,23 @@
     let assignedIndex = localStorage.getItem("assignedTreatmentIndex");
 
     if (assignedIndex === null) {
-      const idx = Math.floor(Math.random() * TREATMENTS.length); // 0–3, alle gleich wahrscheinlich
+      const r = Math.random(); // gleichverteilte Zufallszahl in [0, 1)
+
+      let idx;
+      if (r < 0.2125) {              // 0 – 21.25 %
+        idx = 0;
+      } else if (r < 0.425) {        // 21.25 – 42.5 %
+        idx = 1;
+      } else if (r < 0.6375) {       // 42.5 – 63.75 %
+        idx = 2;
+      } else if (r < 0.85) {         // 63.75 – 85 %
+        idx = 3;
+      } else if (r < 0.925) {        // 85 – 92.5 %
+        idx = 4;                     // Verhandlung-5 → 7.5 %
+      } else {                       // 92.5 – 100 %
+        idx = 5;                     // Verhandlung-6 → 7.5 %
+      }
+
       assignedIndex = String(idx);
       localStorage.setItem("assignedTreatmentIndex", assignedIndex);
     }
