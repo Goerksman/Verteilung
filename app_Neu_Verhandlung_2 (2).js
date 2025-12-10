@@ -2,8 +2,8 @@
    HILFSFUNKTIONEN
 ============================================================ */
 
-// ZENTRALE RUNDEFUNKTION: ALLE BETRÄGE AUF GANZE EURO
-const roundEuro = n => Math.round(Number(n));
+// Präzise Rundung auf ganze Euro (Option C)
+const roundEuro = n => Number(Number(n).toFixed(0));
 
 const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
@@ -101,7 +101,7 @@ function shouldAccept(userOffer) {
 
 
 /* ============================================================
-   PREISUPDATE (VERKÄUFER)
+   PREISUPDATE (NEU: ALLE RUNDEN PROZENTUAL)
 ============================================================ */
 
 function computeNextOffer(userOffer) {
@@ -109,31 +109,21 @@ function computeNextOffer(userOffer) {
   if (shouldAccept(userOffer)) return roundEuro(userOffer);
 
   const f = state.scale;
-  const r = state.runde;
-  const min = state.min_price;
   const curr = state.current_offer;
+  const min = state.min_price;
 
-  let next;
-
-  if (r === 1) {
-    next = curr - roundEuro(1000 * f);
-  } else if (r === 2) {
-    next = curr - roundEuro(500 * f);
-  } else if (r === 3) {
-    next = curr - roundEuro(250 * f);
-  } else {
-    next = curr - (curr - min) * 0.40;
-  }
+  // ab jetzt in jeder Runde prozentuale Annäherung
+  let next = curr - (curr - min) * 0.40;
 
   if (next < min) next = min;
 
-  return roundEuro(next);
+  return roundEuro(next); // Präzise runden
 }
 
 
 
 /* ============================================================
-   WARNUNGEN
+   WARNUNGEN  (ohne Schmerzgrenze)
 ============================================================ */
 
 function getWarning(userOffer) {
@@ -146,7 +136,7 @@ function getWarning(userOffer) {
   const last = state.history[state.history.length - 1];
 
   if (userOffer < LOWBALL_LIMIT)
-    return `Ihr Angebot liegt deutlich unter dem akzeptablen Bereich (${eur(LOWBALL_LIMIT)}).`;
+    return `Ihr Angebot liegt deutlich unter dem erwartbaren Verhandlungsbereich.`;
 
   if (last && last.proband_counter != null) {
     const diff = userOffer - last.proband_counter;
@@ -160,10 +150,9 @@ function getWarning(userOffer) {
 
 
 /* ============================================================
-   RISIKO-SYSTEM (NEU: 1500-SOFORT-ABBRUCH + DIFFERENZMODELL)
+   RISIKO-SYSTEM (1500-SOFORTABBRUCH + DIFFERENZMODELL)
 ============================================================ */
 
-// Risiko basierend nur auf der Differenz
 function abortProbability(diff) {
   diff = roundEuro(diff);
   const f = state.scale;
@@ -180,16 +169,13 @@ function abortProbability(diff) {
 }
 
 
-// maybeAbort: berücksichtigt 1500-Regel und Risiko
-function maybeAbort(userOffer) {
 
+function maybeAbort(userOffer) {
   const f = state.scale;
   const seller = state.current_offer;
   const buyer = roundEuro(userOffer);
 
-  // 1) SOFORTABBRUCH
   if (buyer < roundEuro(1500 * f)) {
-
     logRound({
       runde: state.runde,
       algo_offer: seller,
@@ -199,19 +185,18 @@ function maybeAbort(userOffer) {
       deal_price: ""
     });
 
-    state.finished = true;
     state.accepted = false;
+    state.finished = true;
     viewAbort(100);
-
     return true;
   }
 
-  // 2) Risiko nach Differenz
   const diff = Math.abs(seller - buyer);
   const chance = abortProbability(diff);
   const roll = randInt(1, 100);
 
   if (roll <= chance) {
+
     logRound({
       runde: state.runde,
       algo_offer: seller,
@@ -221,10 +206,9 @@ function maybeAbort(userOffer) {
       deal_price: ""
     });
 
-    state.finished = true;
     state.accepted = false;
+    state.finished = true;
     viewAbort(chance);
-
     return true;
   }
 
@@ -539,6 +523,3 @@ function finish(accepted, dealPrice) {
 ============================================================ */
 
 viewVignette();
-
-
-
