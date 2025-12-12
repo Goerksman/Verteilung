@@ -3,7 +3,9 @@
 /* ========================================================================== */
 const Q = new URLSearchParams(location.search);
 const CONFIG = {
+  // Basis-Startangebot (präzise Zahl zwischen 5400 und 5600)
   INITIAL_OFFER: Number(Q.get('i')) || 5518,
+
   MIN_PRICE: Q.has('min') ? Number(Q.get('min')) : undefined,
   MIN_PRICE_FACTOR: Number(Q.get('mf')) || 0.70,
   ACCEPT_MARGIN: Number(Q.get('am')) || 0.12,
@@ -234,8 +236,7 @@ function maybeAbort(userOffer) {
   }
 
   // 2) Basisrisiko über Differenz
-  const diffBase = Math.abs(state.current_offer - buyer);
-  let chance     = abortProbability(buyer);
+  let chance = abortProbability(buyer);
 
   // 3) kleine Schritte (<150 €) in den ersten 4 Runden → Risikoaufschlag & Warnung
   state.warningText = '';
@@ -353,7 +354,7 @@ function computeNextOffer(prevOffer, minPrice, probandCounter, runde, lastConces
   const floor = roundEuro(minPrice);
   const step  = roundEuro(state.step_amount || BASE_STEP_AMOUNT);
 
-  const raw = prev - step;
+  const raw  = prev - step;
   const next = Math.max(floor, Math.min(raw, prev));
 
   return roundEuro(next);
@@ -547,8 +548,8 @@ function handleSubmit(raw){
     }
   }
 
-  const prevOffer = state.current_offer;
-  const f         = state.scale_factor || 1.0;
+  const prevOffer        = state.current_offer;
+  const f                = state.scale_factor || 1.0;
   const extremeThreshold = EXTREME_BASE * f;
 
   // Auto-Accept
@@ -576,7 +577,7 @@ function handleSubmit(raw){
     return viewThink(() => viewFinish(true));
   }
 
-  // zusätzlicher Hardcut (extremeThreshold) – falls du ihn behalten willst
+  // zusätzlicher Hardcut (extremeThreshold) – optional
   if (num < extremeThreshold) {
     state.last_abort_chance = 100;
 
