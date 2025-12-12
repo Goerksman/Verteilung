@@ -91,7 +91,7 @@ function nextDimensionFactor() {
   return dimensionQueue.pop();
 }
 
-// aktuell nicht genutzt, aber belassen
+// Prozentsätze, die für die Verkäufer-Zugeständnisse verwendet werden
 const PERCENT_STEPS = [
   0.02, 0.021, 0.022, 0.023, 0.024, 0.025,
   0.026, 0.027, 0.028, 0.029, 0.03, 0.031,
@@ -125,7 +125,7 @@ function newState(){
   const factor        = nextDimensionFactor();               // 1.0 / 1.3 / 1.5
   const initialOffer  = roundEuro(BASE_INITIAL_OFFER * factor);
   const floorRounded  = roundEuro(BASE_MIN_PRICE   * factor);
-  const stepAmount    = roundEuro(BASE_STEP_AMOUNT * factor);
+  const stepAmount    = roundEuro(BASE_STEP_AMOUNT * factor); // wird für Statistik behalten
 
   return {
     participant_id: crypto.randomUUID?.() || ('x_'+Date.now()+Math.random().toString(36).slice(2)),
@@ -368,15 +368,25 @@ function updatePatternMessage(){
 }
 
 /* ========================================================================== */
-/* Angebotslogik des Verkäufers                                              */
+/* Angebotslogik des Verkäufers – JETZT PROZENTUAL JE RUNDE                  */
 /* ========================================================================== */
-function computeNextOffer(prevOffer, minPrice, probandCounter, runde, lastConcession){
+function computeNextOffer(prevOffer, minPrice){
   const prev  = roundEuro(prevOffer);
   const floor = roundEuro(minPrice);
-  const step  = roundEuro(state.step_amount || BASE_STEP_AMOUNT);
 
-  const raw  = prev - step;
-  const next = Math.max(floor, Math.min(raw, prev));
+  // wenn bereits an der Untergrenze
+  if (prev <= floor) return floor;
+
+  const gap = prev - floor;
+
+  // zufälligen Prozentsatz aus PERCENT_STEPS wählen
+  const idx = randInt(0, PERCENT_STEPS.length - 1);
+  const pct = PERCENT_STEPS[idx];
+
+  // Verkäufer bewegt sich um pct * (Abstand zur Untergrenze) nach unten
+  let next = prev - gap * pct;
+
+  if (next < floor) next = floor;
 
   return roundEuro(next);
 }
@@ -628,8 +638,8 @@ function handleSubmit(raw){
   // Abbruch prüfen (setzt ggf. warningText + last_abort_chance)
   if (maybeAbort(num)) return;
 
-  // normale Runde
-  const next       = computeNextOffer(prevOffer, state.min_price, num, state.runde, state.last_concession);
+  // normale Runde: Verkäufer senkt PREIS PROZENTUAL
+  const next       = computeNextOffer(prevOffer, state.min_price);
   const concession = prevOffer - next;
 
   logRound({
