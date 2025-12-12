@@ -1,34 +1,11 @@
-* ========================================================================== */
-/* Präzises Startangebot (5400–5600, ohne prominente Endziffern)              */
-/* ========================================================================== */
-function randomInitial() {
-  const min = 5400;
-  const max = 5600;
-
-  while (true) {
-    let n = Math.floor(min + Math.random() * (max - min + 1));
-
-    const last = n % 10;
-
-    // "Prominente" Zahlen vermeiden:
-    // - glatte 100er (5400, 5500, 5600)
-    // - glatte 50er (5450, 5550, …)
-    // - Endziffer 0 oder 5
-    if (n % 100 === 0) continue;
-    if (n % 50 === 0) continue;
-    if (last === 0 || last === 5) continue;
-
-    return n;
-  }
-}
-
 /* ========================================================================== */
 /* Konfiguration via URL                                                     */
 /* ========================================================================== */
 const Q = new URLSearchParams(location.search);
+
 const CONFIG = {
-  // Basis-Startangebot (präzise Zahl zwischen 5400 und 5600, falls kein ?i= gesetzt)
-  INITIAL_OFFER: Q.get('i') ? Number(Q.get('i')) : randomInitial(),
+  // Basis-Startangebot: präzise Zahl 5567, falls ?i= nicht gesetzt ist
+  INITIAL_OFFER: Q.get('i') ? Number(Q.get('i')) : 5567,
 
   MIN_PRICE: Q.has('min') ? Number(Q.get('min')) : undefined,
   MIN_PRICE_FACTOR: Number(Q.get('mf')) || 0.70,
@@ -55,7 +32,8 @@ if (!window.playerId) {
     Q.get('pid') ||
     Q.get('id');
 
-  window.playerId = fromUrl || ('P_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+  window.playerId =
+    fromUrl || ('P_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
 }
 
 if (!window.probandCode) {
@@ -70,16 +48,25 @@ if (!window.probandCode) {
 /* ========================================================================== */
 /* Konstanten                                                                 */
 /* ========================================================================== */
-const UNACCEPTABLE_LIMIT = 2250;   // Basisgrenze, wird mit Faktor skaliert
-const EXTREME_BASE       = 1500;   // Sofortabbruch-Basis, wird mit Faktor skaliert
-const ABSOLUTE_FLOOR     = 3500;   // (informativ, logisch nutzen wir MIN_PRICE)
+
+const UNACCEPTABLE_LIMIT = 2250;  // Basisgrenze für Mustererkennung (skaliert mit Faktor)
+const EXTREME_BASE       = 1500;  // Sofortabbruch-Basis (skaliert mit Faktor)
+const ABSOLUTE_FLOOR     = 3500;  // Informativ; Logik nutzt MIN_PRICE
 const BASE_INITIAL_OFFER = CONFIG.INITIAL_OFFER;
 const BASE_MIN_PRICE     = CONFIG.MIN_PRICE;
-const BASE_STEP_AMOUNT   = 500;
 
-// kleine Schrittgröße als Basis (wird mit Faktor skaliert)
-const SMALL_STEP_BASE    = 150;
+// Prozentuale Annäherung (ca. 2–4 %)
+const PERCENT_STEPS = [
+  0.020, 0.021, 0.022, 0.023, 0.024, 0.025,
+  0.026, 0.027, 0.028, 0.029, 0.030, 0.031,
+  0.032, 0.033, 0.034, 0.035, 0.036, 0.037,
+  0.038, 0.039, 0.040
+];
 
+// kleine Schrittgröße als Basis (wird mit Faktor skaliert, z.B. 150, 195, 225 ...)
+const SMALL_STEP_BASE = 150;
+
+// Dimensionen / Multiplikatoren
 const DIMENSION_FACTORS = [1.0, 1.3, 1.5];
 let dimensionQueue = [];
 
@@ -98,14 +85,6 @@ function nextDimensionFactor() {
   return dimensionQueue.pop();
 }
 
-// Prozentsätze, die für die Verkäufer-Zugeständnisse verwendet werden
-const PERCENT_STEPS = [
-  0.02, 0.021, 0.022, 0.023, 0.024, 0.025,
-  0.026, 0.027, 0.028, 0.029, 0.03, 0.031,
-  0.032, 0.033, 0.034, 0.035, 0.036, 0.037,
-  0.038, 0.039, 0.04
-];
-
 /* ========================================================================== */
 /* Hilfsfunktionen                                                            */
 /* ========================================================================== */
@@ -115,7 +94,7 @@ const roundEuro = n => Number(Number(n).toFixed(0));
 
 const app = document.getElementById('app');
 
-const randInt = (a,b) => Math.floor(a + Math.random()*(b-a+1));
+const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 
 const eur = n =>
   new Intl.NumberFormat('de-DE', {
@@ -125,53 +104,22 @@ const eur = n =>
     maximumFractionDigits: 0
   }).format(roundEuro(n));
 
-/**
- * Hilfsfunktion: macht Zahlen „unprominent“ (keine Endziffer 0 oder 5,
- * keine glatten 50er/100er), bleibt innerhalb [min, max].
- */
-function makeUgly(n, min, max) {
-  let v = roundEuro(n);
-  const isProminent = (x) => {
-    const last = x % 10;
-    return (x % 100 === 0) || (x % 50 === 0) || last === 0 || last === 5;
-  };
-
-  if (!isProminent(v)) return v;
-
-  const offsets = [3, -3, 7, -7, 11, -11, 2, -2];
-  for (const off of offsets) {
-    const cand = v + off;
-    if (cand >= min && cand <= max && !isProminent(cand)) {
-      return cand;
-    }
-  }
-  // Falls alles fehlschlägt, nimm v wie er ist (ist sehr unwahrscheinlich)
-  return v;
-}
-
 /* ========================================================================== */
 /* Zustand                                                                    */
 /* ========================================================================== */
-function newState(){
-  const factor = nextDimensionFactor();               // 1.0 / 1.3 / 1.5
-
-  // skaliert
-  let initialOffer = roundEuro(BASE_INITIAL_OFFER * factor);
-  let floorRounded = roundEuro(BASE_MIN_PRICE   * factor);
-
-  // Bereich für "Unschön-Machen" ausreichend groß wählen
-  initialOffer = makeUgly(initialOffer, 2000, 20000);
-  floorRounded = makeUgly(floorRounded, 1000, initialOffer);
-
-  const stepAmount = roundEuro(BASE_STEP_AMOUNT * factor); // eher kosmetisch
+function newState() {
+  const factor       = nextDimensionFactor(); // 1.0 / 1.3 / 1.5
+  const initialOffer = roundEuro(BASE_INITIAL_OFFER * factor);
+  const floorRounded = roundEuro(BASE_MIN_PRICE * factor);
 
   return {
-    participant_id: crypto.randomUUID?.() || ('x_'+Date.now()+Math.random().toString(36).slice(2)),
+    participant_id: crypto.randomUUID?.() ||
+      ('x_' + Date.now() + Math.random().toString(36).slice(2)),
+
     runde: 1,
     max_runden: randInt(CONFIG.ROUNDS_MIN, CONFIG.ROUNDS_MAX),
 
     scale_factor: factor,
-    step_amount: stepAmount,
 
     min_price: floorRounded,
     max_price: initialOffer,
@@ -190,6 +138,7 @@ function newState(){
     warningText: ''
   };
 }
+
 let state = newState();
 
 /* ========================================================================== */
@@ -216,19 +165,22 @@ function logRound(row) {
 /* ========================================================================== */
 /* Auto-Accept                                                                */
 /* ========================================================================== */
-function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter){
+function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter) {
   const c = roundEuro(counter);
   if (!Number.isFinite(c)) return false;
 
   const f = state.scale_factor || 1.0;
 
+  // sehr nahe am Verkäuferangebot (±5 %)
   const diff = Math.abs(prevOffer - c);
   if (diff <= prevOffer * 0.05) return true;
 
+  // individueller "Zielkorridor"
   const accMin = CONFIG.ACCEPT_RANGE_MIN * f;
   const accMax = CONFIG.ACCEPT_RANGE_MAX * f;
   if (c >= accMin && c <= accMax) return true;
 
+  // allgemeiner Schwellenwert
   const margin    = CONFIG.ACCEPT_MARGIN;
   const threshold = Math.max(minPrice, initialOffer * (1 - margin));
   if (c >= threshold) return true;
@@ -238,21 +190,23 @@ function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter){
 
 /* ========================================================================== */
 /* Abbruchwahrscheinlichkeit (Differenzformel, mit Multiplikator)            */
+/*   – Diff = |Verkäufer - Käufer|
+/*   – bei Diff = 3000·f → 40 % (über Referenz 7500·f skaliert)              */
 /* ========================================================================== */
 function abortProbability(userOffer) {
   const seller = state.current_offer;
   const buyer  = roundEuro(userOffer);
   const f      = state.scale_factor || 1.0;
 
-  if (buyer < EXTREME_BASE * f) {
-    return 100;
-  }
-
+  // Extrem-Lowball wird separat in maybeAbort behandelt
   const diff = Math.abs(seller - buyer);
 
-  let chance = (diff / (3000 * f)) * 75;
-  if (chance < 0)  chance = 0;
-  if (chance > 75) chance = 75;
+  // Referenz: 3000 → 40 %, 7500 → 100 %
+  const REF_DIFF = 7500 * f;
+  let chance = (diff / REF_DIFF) * 100;
+
+  if (chance < 0)   chance = 0;
+  if (chance > 100) chance = 100;
 
   return roundEuro(chance);
 }
@@ -292,17 +246,16 @@ function maybeAbort(userOffer) {
     return true;
   }
 
-  // 2) Basisrisiko
+  // 2) Basisrisiko aus Differenz
   let chance = abortProbability(buyer);
 
-  // 3) Kleine Schritte (< SMALL_STEP_BASE * f) in den ersten 4 Runden → Aufschlag
+  // 3) Kleine Schritte in den ersten 4 Runden → Aufschlag + Warnung
   state.warningText = '';
   if (state.runde <= 4) {
     const last = state.history[state.history.length - 1];
     if (last && last.proband_counter != null) {
       const lastBuyer = roundEuro(last.proband_counter);
       const stepUp    = buyer - lastBuyer;
-
       const smallStepThreshold = roundEuro(SMALL_STEP_BASE * f);
 
       if (stepUp > 0 && stepUp < smallStepThreshold) {
@@ -347,7 +300,7 @@ function maybeAbort(userOffer) {
 /* ========================================================================== */
 /* Mustererkennung                                                            */
 /* ========================================================================== */
-function getThresholdForAmount(prev){
+function getThresholdForAmount(prev) {
   const f = state.scale_factor || 1.0;
   const A = UNACCEPTABLE_LIMIT * f;
   const B = 3000 * f;
@@ -360,7 +313,7 @@ function getThresholdForAmount(prev){
   return null;
 }
 
-function updatePatternMessage(){
+function updatePatternMessage() {
   const f     = state.scale_factor || 1.0;
   const limit = UNACCEPTABLE_LIMIT * f;
 
@@ -384,17 +337,20 @@ function updatePatternMessage(){
     const prev = counters[j - 1];
     const curr = counters[j];
     const diff = curr - prev;
+
     if (diff < 0) {
       chainLen = 1;
       continue;
     }
+
     const threshold = getThresholdForAmount(prev);
     if (threshold == null) {
       chainLen = 1;
       continue;
     }
+
     if (diff <= prev * threshold) chainLen++;
-    else chainLen = 1;
+    else                          chainLen = 1;
   }
 
   if (chainLen >= 3) {
@@ -406,28 +362,21 @@ function updatePatternMessage(){
 }
 
 /* ========================================================================== */
-/* Angebotslogik des Verkäufers – PROZENTUAL JE RUNDE                         */
+/* Angebotslogik des Verkäufers: JEDE Runde prozentualer Schritt             */
 /* ========================================================================== */
-function computeNextOffer(prevOffer, minPrice){
+function computeNextOffer(prevOffer, minPrice, probandCounter, runde, lastConcession) {
   const prev  = roundEuro(prevOffer);
   const floor = roundEuro(minPrice);
 
-  // wenn bereits an der Untergrenze
-  if (prev <= floor) return floor;
+  const diff = prev - floor;
+  if (diff <= 0) return prev; // schon auf Untergrenze
 
-  const gap = prev - floor;
-
-  // zufälligen Prozentsatz aus PERCENT_STEPS wählen
+  // prozentualer Schritt (immer aus PERCENT_STEPS gewählt)
   const idx = randInt(0, PERCENT_STEPS.length - 1);
-  const pct = PERCENT_STEPS[idx];
+  const stepFactor = PERCENT_STEPS[idx];
 
-  // Verkäufer bewegt sich um pct * (Abstand zur Untergrenze) nach unten
-  let next = prev - gap * pct;
-
+  let next = prev - diff * stepFactor;
   if (next < floor) next = floor;
-
-  // auch hier „unschön“ machen, damit nicht zufällig 100er/50er entstehen
-  next = makeUgly(next, floor, prev);
 
   return roundEuro(next);
 }
@@ -436,7 +385,31 @@ function computeNextOffer(prevOffer, minPrice){
 /* Rendering                                                                  */
 /* ========================================================================== */
 
-function viewVignette(){
+function historyTable() {
+  if (!state.history.length) return '';
+  const rows = state.history
+    .map(h => `
+      <tr>
+        <td>${h.runde}</td>
+        <td>${eur(h.algo_offer)}</td>
+        <td>${h.proband_counter != null && h.proband_counter !== '' ? eur(h.proband_counter) : '-'}</td>
+        <td>${h.accepted ? 'Ja' : 'Nein'}</td>
+      </tr>
+    `)
+    .join('');
+
+  return `
+    <h2>Verlauf</h2>
+    <table>
+      <thead>
+        <tr><th>Runde</th><th>Angebot Verkäufer</th><th>Gegenangebot</th><th>Angenommen?</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function viewVignette() {
   app.innerHTML = `
     <h1>Designer-Verkaufsmesse</h1>
     <p class="muted">Stelle dir folgende Situation vor:</p>
@@ -462,11 +435,14 @@ function viewVignette(){
 
   const consent = document.getElementById('consent');
   const startBtn = document.getElementById('startBtn');
-  consent.onchange = () => startBtn.disabled = !consent.checked;
-  startBtn.onclick = () => { state = newState(); viewNegotiate(); };
+  consent.onchange = () => (startBtn.disabled = !consent.checked);
+  startBtn.onclick = () => {
+    state = newState();
+    viewNegotiate();
+  };
 }
 
-function viewThink(next){
+function viewThink(next) {
   const delay = randInt(CONFIG.THINK_DELAY_MS_MIN, CONFIG.THINK_DELAY_MS_MAX);
   app.innerHTML = `
     <h1>Die Verkäuferseite überlegt<span class="pulse">…</span></h1>
@@ -474,31 +450,7 @@ function viewThink(next){
   setTimeout(next, delay);
 }
 
-function historyTable(){
-  if (!state.history.length) return '';
-  const rows = state.history
-    .map(h => `
-      <tr>
-        <td>${h.runde}</td>
-        <td>${eur(h.algo_offer)}</td>
-        <td>${h.proband_counter != null && h.proband_counter !== '' ? eur(h.proband_counter) : '-'}</td>
-        <td>${h.accepted ? 'Ja' : 'Nein'}</td>
-      </tr>
-    `)
-    .join('');
-
-  return `
-    <h2>Verlauf</h2>
-    <table>
-      <thead>
-        <tr><th>Runde</th><th>Angebot Verkäufer</th><th>Gegenangebot</th><th>Angenommen?</th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-}
-
-function viewAbort(chance){
+function viewAbort(chance) {
   app.innerHTML = `
     <h1>Verhandlung abgebrochen</h1>
     <p class="muted">Teilnehmer-ID: ${state.participant_id}</p>
@@ -519,13 +471,14 @@ function viewAbort(chance){
   };
 }
 
-function viewNegotiate(errorMsg){
-  const abortChance = (typeof state.last_abort_chance === 'number')
-    ? roundEuro(state.last_abort_chance)
-    : null;
+function viewNegotiate(errorMsg) {
+  const abortChance =
+    typeof state.last_abort_chance === 'number'
+      ? roundEuro(state.last_abort_chance)
+      : null;
 
   let color = '#16a34a';
-  if (abortChance !== null){
+  if (abortChance !== null) {
     if (abortChance > 50) color = '#ea580c';
     else if (abortChance > 25) color = '#eab308';
   }
@@ -570,7 +523,9 @@ function viewNegotiate(errorMsg){
   `;
 
   const inputEl = document.getElementById('counter');
-  inputEl.onkeydown = e => { if (e.key === "Enter") handleSubmit(inputEl.value); };
+  inputEl.onkeydown = e => {
+    if (e.key === 'Enter') handleSubmit(inputEl.value);
+  };
   document.getElementById('sendBtn').onclick = () => handleSubmit(inputEl.value);
 
   document.getElementById('acceptBtn').onclick = () => {
@@ -601,31 +556,31 @@ function viewNegotiate(errorMsg){
 /* ========================================================================== */
 /* Handle Submit                                                              */
 /* ========================================================================== */
-function handleSubmit(raw){
-  const val    = String(raw ?? '').trim().replace(',','.');
+function handleSubmit(raw) {
+  const val    = String(raw ?? '').trim().replace(',', '.');
   const parsed = Number(val);
 
-  if (!Number.isFinite(parsed) || parsed < 0){
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return viewNegotiate('Bitte eine gültige Zahl ≥ 0 eingeben.');
   }
 
   const num = roundEuro(parsed);
 
-  // kein niedrigeres Angebot als in der Vorrunde
+  // keine niedrigeren Angebote als in der Vorrunde
   const last = state.history[state.history.length - 1];
   if (last && last.proband_counter != null) {
     const lastBuyer = roundEuro(last.proband_counter);
     if (num < lastBuyer) {
-      return viewNegotiate(`Dein Gegenangebot darf nicht niedriger sein als in der Vorrunde (${eur(lastBuyer)}).`);
+      return viewNegotiate(
+        `Dein Gegenangebot darf nicht niedriger sein als in der Vorrunde (${eur(lastBuyer)}).`
+      );
     }
   }
 
-  const prevOffer        = state.current_offer;
-  const f                = state.scale_factor || 1.0;
-  const extremeThreshold = EXTREME_BASE * f;
+  const prevOffer = state.current_offer;
 
   // Auto-Accept
-  if (shouldAutoAccept(state.initial_offer, state.min_price, prevOffer, num)){
+  if (shouldAutoAccept(state.initial_offer, state.min_price, prevOffer, num)) {
     state.history.push({
       runde: state.runde,
       algo_offer: prevOffer,
@@ -649,38 +604,17 @@ function handleSubmit(raw){
     return viewThink(() => viewFinish(true));
   }
 
-  // zusätzlicher Hardcut
-  if (num < extremeThreshold) {
-    state.last_abort_chance = 100;
-
-    state.history.push({
-      runde: state.runde,
-      algo_offer: prevOffer,
-      proband_counter: num,
-      accepted: false
-    });
-
-    logRound({
-      runde: state.runde,
-      algo_offer: prevOffer,
-      proband_counter: num,
-      accepted: false,
-      finished: true,
-      deal_price: ''
-    });
-
-    state.finished      = true;
-    state.accepted      = false;
-    state.finish_reason = 'abort';
-
-    return viewAbort(100);
-  }
-
   // Abbruch prüfen (setzt ggf. warningText + last_abort_chance)
   if (maybeAbort(num)) return;
 
-  // normale Runde: Verkäufer senkt PREIS PROZENTUAL
-  const next       = computeNextOffer(prevOffer, state.min_price);
+  // normale Runde: Verkäufer geht prozentual runter
+  const next       = computeNextOffer(
+    prevOffer,
+    state.min_price,
+    num,
+    state.runde,
+    state.last_concession
+  );
   const concession = prevOffer - next;
 
   logRound({
@@ -704,7 +638,7 @@ function handleSubmit(raw){
   state.current_offer   = next;
   state.last_concession = concession;
 
-  if (state.runde >= state.max_runden){
+  if (state.runde >= state.max_runden) {
     state.finished      = true;
     state.finish_reason = 'max_rounds';
     return viewThink(() => viewDecision());
@@ -717,7 +651,7 @@ function handleSubmit(raw){
 /* ========================================================================== */
 /* Entscheidung                                                               */
 /* ========================================================================== */
-function viewDecision(){
+function viewDecision() {
   app.innerHTML = `
     <h1>Letzte Runde</h1>
     <p class="muted">Teilnehmer-ID: ${state.participant_id}</p>
@@ -733,12 +667,11 @@ function viewDecision(){
   `;
 
   document.getElementById('takeBtn').onclick = () => {
-
     state.history.push({
       runde: state.runde,
       algo_offer: state.current_offer,
       proband_counter: null,
-      accepted:true
+      accepted: true
     });
 
     logRound({
@@ -753,16 +686,16 @@ function viewDecision(){
     state.accepted   = true;
     state.finished   = true;
     state.deal_price = state.current_offer;
+
     viewThink(() => viewFinish(true));
   };
 
   document.getElementById('noBtn').onclick = () => {
-
     state.history.push({
       runde: state.runde,
       algo_offer: state.current_offer,
       proband_counter: null,
-      accepted:false
+      accepted: false
     });
 
     logRound({
@@ -777,6 +710,7 @@ function viewDecision(){
     state.accepted      = false;
     state.finished      = true;
     state.finish_reason = 'max_rounds';
+
     viewThink(() => viewFinish(false));
   };
 }
@@ -784,7 +718,7 @@ function viewDecision(){
 /* ========================================================================== */
 /* Finish                                                                     */
 /* ========================================================================== */
-function viewFinish(accepted){
+function viewFinish(accepted) {
   const dealPrice = state.deal_price ?? state.current_offer;
 
   let text;
