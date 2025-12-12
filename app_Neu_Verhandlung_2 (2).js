@@ -1,18 +1,25 @@
-/* ========================================================================== */
-/* Präzises Startangebot (5400–5600, keine glatten Hunderter)                 */
+* ========================================================================== */
+/* Präzises Startangebot (5400–5600, ohne prominente Endziffern)              */
 /* ========================================================================== */
 function randomInitial() {
   const min = 5400;
   const max = 5600;
-  let n = Math.floor(min + Math.random() * (max - min + 1));
 
-  // Falls genau auf Hunderter (z.B. 5400, 5500, 5600), leicht verschieben,
-  // damit alle Stellen "informativ" sind.
-  if (n % 100 === 0) {
-    if (n + 37 <= max) n += 37;
-    else n -= 37;
+  while (true) {
+    let n = Math.floor(min + Math.random() * (max - min + 1));
+
+    const last = n % 10;
+
+    // "Prominente" Zahlen vermeiden:
+    // - glatte 100er (5400, 5500, 5600)
+    // - glatte 50er (5450, 5550, …)
+    // - Endziffer 0 oder 5
+    if (n % 100 === 0) continue;
+    if (n % 50 === 0) continue;
+    if (last === 0 || last === 5) continue;
+
+    return n;
   }
-  return n;
 }
 
 /* ========================================================================== */
@@ -118,14 +125,45 @@ const eur = n =>
     maximumFractionDigits: 0
   }).format(roundEuro(n));
 
+/**
+ * Hilfsfunktion: macht Zahlen „unprominent“ (keine Endziffer 0 oder 5,
+ * keine glatten 50er/100er), bleibt innerhalb [min, max].
+ */
+function makeUgly(n, min, max) {
+  let v = roundEuro(n);
+  const isProminent = (x) => {
+    const last = x % 10;
+    return (x % 100 === 0) || (x % 50 === 0) || last === 0 || last === 5;
+  };
+
+  if (!isProminent(v)) return v;
+
+  const offsets = [3, -3, 7, -7, 11, -11, 2, -2];
+  for (const off of offsets) {
+    const cand = v + off;
+    if (cand >= min && cand <= max && !isProminent(cand)) {
+      return cand;
+    }
+  }
+  // Falls alles fehlschlägt, nimm v wie er ist (ist sehr unwahrscheinlich)
+  return v;
+}
+
 /* ========================================================================== */
 /* Zustand                                                                    */
 /* ========================================================================== */
 function newState(){
-  const factor        = nextDimensionFactor();               // 1.0 / 1.3 / 1.5
-  const initialOffer  = roundEuro(BASE_INITIAL_OFFER * factor);
-  const floorRounded  = roundEuro(BASE_MIN_PRICE   * factor);
-  const stepAmount    = roundEuro(BASE_STEP_AMOUNT * factor); // wird für Statistik behalten
+  const factor = nextDimensionFactor();               // 1.0 / 1.3 / 1.5
+
+  // skaliert
+  let initialOffer = roundEuro(BASE_INITIAL_OFFER * factor);
+  let floorRounded = roundEuro(BASE_MIN_PRICE   * factor);
+
+  // Bereich für "Unschön-Machen" ausreichend groß wählen
+  initialOffer = makeUgly(initialOffer, 2000, 20000);
+  floorRounded = makeUgly(floorRounded, 1000, initialOffer);
+
+  const stepAmount = roundEuro(BASE_STEP_AMOUNT * factor); // eher kosmetisch
 
   return {
     participant_id: crypto.randomUUID?.() || ('x_'+Date.now()+Math.random().toString(36).slice(2)),
@@ -368,7 +406,7 @@ function updatePatternMessage(){
 }
 
 /* ========================================================================== */
-/* Angebotslogik des Verkäufers – JETZT PROZENTUAL JE RUNDE                  */
+/* Angebotslogik des Verkäufers – PROZENTUAL JE RUNDE                         */
 /* ========================================================================== */
 function computeNextOffer(prevOffer, minPrice){
   const prev  = roundEuro(prevOffer);
@@ -387,6 +425,9 @@ function computeNextOffer(prevOffer, minPrice){
   let next = prev - gap * pct;
 
   if (next < floor) next = floor;
+
+  // auch hier „unschön“ machen, damit nicht zufällig 100er/50er entstehen
+  next = makeUgly(next, floor, prev);
 
   return roundEuro(next);
 }
