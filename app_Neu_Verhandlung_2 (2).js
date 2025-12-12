@@ -1,10 +1,36 @@
 /* ========================================================================== */
+/* Präzisierung von Beträgen                                                 */
+/* ========================================================================== */
+
+// präzise ganze Euro
+const roundEuro = n => Number(Number(n).toFixed(0));
+
+/**
+ * Macht einen Betrag "unauffällig":
+ * - keine glatten Hunderter (…00)
+ * - keine glatten Fünfziger (…50)
+ */
+function makePreciseAmount(n) {
+  let v = roundEuro(n);
+
+  if (v % 100 === 0) {
+    // 5500 -> 5517
+    v += 17;
+  } else if (v % 50 === 0) {
+    // 5550 -> 5563
+    v += 13;
+  }
+
+  return v;
+}
+
+/* ========================================================================== */
 /* Konfiguration via URL                                                     */
 /* ========================================================================== */
 const Q = new URLSearchParams(location.search);
 
 const CONFIG = {
-  // Basis-Startangebot: präzise Zahl 5567, falls ?i= nicht gesetzt ist
+  // Basis-Startangebot: Standard 5567, danach präzisiert
   INITIAL_OFFER: Q.get('i') ? Number(Q.get('i')) : 5567,
 
   MIN_PRICE: Q.has('min') ? Number(Q.get('min')) : undefined,
@@ -18,6 +44,7 @@ const CONFIG = {
   ACCEPT_RANGE_MAX: Number(Q.get('armax')) || 4800
 };
 
+// MIN_PRICE ggf. aus Faktor
 CONFIG.MIN_PRICE = Number.isFinite(CONFIG.MIN_PRICE)
   ? CONFIG.MIN_PRICE
   : Math.round(CONFIG.INITIAL_OFFER * CONFIG.MIN_PRICE_FACTOR);
@@ -49,13 +76,15 @@ if (!window.probandCode) {
 /* Konstanten                                                                 */
 /* ========================================================================== */
 
-const UNACCEPTABLE_LIMIT = 2250;  // Basisgrenze für Mustererkennung (skaliert mit Faktor)
-const EXTREME_BASE       = 1500;  // Sofortabbruch-Basis (skaliert mit Faktor)
-const ABSOLUTE_FLOOR     = 3500;  // Informativ; Logik nutzt MIN_PRICE
-const BASE_INITIAL_OFFER = CONFIG.INITIAL_OFFER;
+const UNACCEPTABLE_LIMIT = 2250;
+const EXTREME_BASE       = 1500;
+const ABSOLUTE_FLOOR     = 3500;
+
+// Basiswerte werden direkt beim Laden präzisiert
+const BASE_INITIAL_OFFER = makePreciseAmount(CONFIG.INITIAL_OFFER);
 const BASE_MIN_PRICE     = CONFIG.MIN_PRICE;
 
-// Prozentuale Annäherung (ca. 2–4 %)
+// prozentuale Annäherung
 const PERCENT_STEPS = [
   0.020, 0.021, 0.022, 0.023, 0.024, 0.025,
   0.026, 0.027, 0.028, 0.029, 0.030, 0.031,
@@ -63,7 +92,7 @@ const PERCENT_STEPS = [
   0.038, 0.039, 0.040
 ];
 
-// kleine Schrittgröße als Basis (wird mit Faktor skaliert, z.B. 150, 195, 225 ...)
+// kleine Schrittgröße (für „freche“ Erhöhungen) als Basis
 const SMALL_STEP_BASE = 150;
 
 // Dimensionen / Multiplikatoren
@@ -89,9 +118,6 @@ function nextDimensionFactor() {
 /* Hilfsfunktionen                                                            */
 /* ========================================================================== */
 
-// präzise ganze Euro
-const roundEuro = n => Number(Number(n).toFixed(0));
-
 const app = document.getElementById('app');
 
 const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
@@ -109,19 +135,25 @@ const eur = n =>
 /* ========================================================================== */
 function newState() {
   const factor       = nextDimensionFactor(); // 1.0 / 1.3 / 1.5
-  const initialOffer = roundEuro(BASE_INITIAL_OFFER * factor);
-  const floorRounded = roundEuro(BASE_MIN_PRICE * factor);
+
+  // Startangebot: Basispräzise * Faktor, dann erneut präzisiert
+  const initialRaw   = BASE_INITIAL_OFFER * factor;
+  const initialOffer = makePreciseAmount(initialRaw);
+
+  // Untergrenze: Basis * Faktor, dann präzisieren, damit sie zum Stil passt
+  const minRaw   = BASE_MIN_PRICE * factor;
+  const minPrice = makePreciseAmount(minRaw);
 
   return {
-    participant_id: crypto.randomUUID?.() ||
-      ('x_' + Date.now() + Math.random().toString(36).slice(2)),
+    participant_id:
+      crypto.randomUUID?.() || ('x_' + Date.now() + Math.random().toString(36).slice(2)),
 
     runde: 1,
     max_runden: randInt(CONFIG.ROUNDS_MIN, CONFIG.ROUNDS_MAX),
 
     scale_factor: factor,
 
-    min_price: floorRounded,
+    min_price: minPrice,
     max_price: initialOffer,
     initial_offer: initialOffer,
     current_offer: initialOffer,
@@ -190,15 +222,12 @@ function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter) {
 
 /* ========================================================================== */
 /* Abbruchwahrscheinlichkeit (Differenzformel, mit Multiplikator)            */
-/*   – Diff = |Verkäufer - Käufer|
-/*   – bei Diff = 3000·f → 40 % (über Referenz 7500·f skaliert)              */
 /* ========================================================================== */
 function abortProbability(userOffer) {
   const seller = state.current_offer;
   const buyer  = roundEuro(userOffer);
   const f      = state.scale_factor || 1.0;
 
-  // Extrem-Lowball wird separat in maybeAbort behandelt
   const diff = Math.abs(seller - buyer);
 
   // Referenz: 3000 → 40 %, 7500 → 100 %
@@ -371,12 +400,17 @@ function computeNextOffer(prevOffer, minPrice, probandCounter, runde, lastConces
   const diff = prev - floor;
   if (diff <= 0) return prev; // schon auf Untergrenze
 
-  // prozentualer Schritt (immer aus PERCENT_STEPS gewählt)
-  const idx = randInt(0, PERCENT_STEPS.length - 1);
+  const idx        = randInt(0, PERCENT_STEPS.length - 1);
   const stepFactor = PERCENT_STEPS[idx];
 
-  let next = prev - diff * stepFactor;
-  if (next < floor) next = floor;
+  let candidate = prev - diff * stepFactor;
+
+  let next;
+  if (candidate <= floor) {
+    next = floor;
+  } else {
+    next = makePreciseAmount(candidate);
+  }
 
   return roundEuro(next);
 }
@@ -604,10 +638,10 @@ function handleSubmit(raw) {
     return viewThink(() => viewFinish(true));
   }
 
-  // Abbruch prüfen (setzt ggf. warningText + last_abort_chance)
+  // Abbruch prüfen
   if (maybeAbort(num)) return;
 
-  // normale Runde: Verkäufer geht prozentual runter
+  // normale Runde: Verkäufer geht prozentual runter und Ergebnis wird präzisiert
   const next       = computeNextOffer(
     prevOffer,
     state.min_price,
