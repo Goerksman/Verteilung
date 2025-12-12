@@ -63,15 +63,16 @@ if (!window.probandCode) {
 /* ========================================================================== */
 /* Konstanten                                                                 */
 /* ========================================================================== */
-const UNACCEPTABLE_LIMIT = 2250;    // Basisgrenze (wird mit Faktor skaliert)
-const EXTREME_BASE       = 1500;    // Basis-Lowball-Grenze (wird mit Faktor skaliert)
-const ABSOLUTE_FLOOR     = 3500;    // hier nur informativ, Logik nutzt MIN_PRICE
-
+const UNACCEPTABLE_LIMIT = 2250;   // Basisgrenze, wird mit Faktor skaliert
+const EXTREME_BASE       = 1500;   // Sofortabbruch-Basis, wird mit Faktor skaliert
+const ABSOLUTE_FLOOR     = 3500;   // (informativ, logisch nutzen wir MIN_PRICE)
 const BASE_INITIAL_OFFER = CONFIG.INITIAL_OFFER;
 const BASE_MIN_PRICE     = CONFIG.MIN_PRICE;
 const BASE_STEP_AMOUNT   = 500;
 
-// Multiplikatoren / Dimensionen
+// kleine Schrittgröße als Basis (wird mit Faktor skaliert)
+const SMALL_STEP_BASE    = 150;
+
 const DIMENSION_FACTORS = [1.0, 1.3, 1.5];
 let dimensionQueue = [];
 
@@ -90,7 +91,7 @@ function nextDimensionFactor() {
   return dimensionQueue.pop();
 }
 
-// aktuell nicht genutzt, aber belassen, falls du später wieder Prozentsteps brauchst
+// aktuell nicht genutzt, aber belassen
 const PERCENT_STEPS = [
   0.02, 0.021, 0.022, 0.023, 0.024, 0.025,
   0.026, 0.027, 0.028, 0.029, 0.03, 0.031,
@@ -121,10 +122,10 @@ const eur = n =>
 /* Zustand                                                                    */
 /* ========================================================================== */
 function newState(){
-  const factor        = nextDimensionFactor();           // Multiplikator 1.0 / 1.3 / 1.5
+  const factor        = nextDimensionFactor();               // 1.0 / 1.3 / 1.5
   const initialOffer  = roundEuro(BASE_INITIAL_OFFER * factor);
   const floorRounded  = roundEuro(BASE_MIN_PRICE   * factor);
-  const stepAmount    = BASE_STEP_AMOUNT           * factor;
+  const stepAmount    = roundEuro(BASE_STEP_AMOUNT * factor);
 
   return {
     participant_id: crypto.randomUUID?.() || ('x_'+Date.now()+Math.random().toString(36).slice(2)),
@@ -183,16 +184,13 @@ function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter){
 
   const f = state.scale_factor || 1.0;
 
-  // innerhalb 5 % Abstand zum letzten Verkäuferangebot
   const diff = Math.abs(prevOffer - c);
   if (diff <= prevOffer * 0.05) return true;
 
-  // expliziter Akzeptanzbereich (skaliert mit Multiplikator)
   const accMin = CONFIG.ACCEPT_RANGE_MIN * f;
   const accMax = CONFIG.ACCEPT_RANGE_MAX * f;
   if (c >= accMin && c <= accMax) return true;
 
-  // Margin-Regel
   const margin    = CONFIG.ACCEPT_MARGIN;
   const threshold = Math.max(minPrice, initialOffer * (1 - margin));
   if (c >= threshold) return true;
@@ -201,21 +199,19 @@ function shouldAutoAccept(initialOffer, minPrice, prevOffer, counter){
 }
 
 /* ========================================================================== */
-/* Abbruchwahrscheinlichkeit (Differenzformel, skaliert mit Faktor)          */
+/* Abbruchwahrscheinlichkeit (Differenzformel, mit Multiplikator)            */
 /* ========================================================================== */
 function abortProbability(userOffer) {
   const seller = state.current_offer;
   const buyer  = roundEuro(userOffer);
   const f      = state.scale_factor || 1.0;
 
-  // sehr niedrige Angebote unter EXTREME_BASE * f → 100 %
   if (buyer < EXTREME_BASE * f) {
     return 100;
   }
 
   const diff = Math.abs(seller - buyer);
 
-  // Basis: bei ca. 3000*f Differenz → ~75 % (gedeckelt)
   let chance = (diff / (3000 * f)) * 75;
   if (chance < 0)  chance = 0;
   if (chance > 75) chance = 75;
@@ -258,10 +254,10 @@ function maybeAbort(userOffer) {
     return true;
   }
 
-  // 2) Basisrisiko über Differenz (mit Faktor)
+  // 2) Basisrisiko
   let chance = abortProbability(buyer);
 
-  // 3) kleine Schritte (<150 €) in den ersten 4 Runden → Risikoaufschlag & Warnung
+  // 3) Kleine Schritte (< SMALL_STEP_BASE * f) in den ersten 4 Runden → Aufschlag
   state.warningText = '';
   if (state.runde <= 4) {
     const last = state.history[state.history.length - 1];
@@ -269,7 +265,9 @@ function maybeAbort(userOffer) {
       const lastBuyer = roundEuro(last.proband_counter);
       const stepUp    = buyer - lastBuyer;
 
-      if (stepUp > 0 && stepUp < 150 * f) {  // Schrittgrenze ebenfalls skaliert
+      const smallStepThreshold = roundEuro(SMALL_STEP_BASE * f);
+
+      if (stepUp > 0 && stepUp < smallStepThreshold) {
         chance = Math.min(chance + 15, 100);
         state.warningText =
           `Deine bisherigen Erhöhungen sind ziemlich frech – mach bitte einen größeren Schritt nach oben.`;
@@ -309,11 +307,11 @@ function maybeAbort(userOffer) {
 }
 
 /* ========================================================================== */
-/* Mustererkennung (kleine Schritte in Reihe, skaliert)                       */
+/* Mustererkennung                                                            */
 /* ========================================================================== */
 function getThresholdForAmount(prev){
   const f = state.scale_factor || 1.0;
-  const A = UNACCEPTABLE_LIMIT * f;  // 2250*f
+  const A = UNACCEPTABLE_LIMIT * f;
   const B = 3000 * f;
   const C = 4000 * f;
   const D = 5000 * f;
@@ -600,7 +598,7 @@ function handleSubmit(raw){
     return viewThink(() => viewFinish(true));
   }
 
-  // zusätzlicher Hardcut (extremeThreshold)
+  // zusätzlicher Hardcut
   if (num < extremeThreshold) {
     state.last_abort_chance = 100;
 
